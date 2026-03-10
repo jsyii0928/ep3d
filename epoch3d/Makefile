@@ -302,8 +302,8 @@ MACHINE := $(shell uname -n)
 PREPROFLAGS = $(DEFINES) $(D)_COMMIT='"$(COMMIT)"' $(D)_DATE=$(DATE) \
   $(D)_MACHINE='"$(MACHINE)"' -I$(INCDIR)
 
-FC_INFO := $(shell ${FC} --version 2>/dev/null \
-    || ${FC} -V 2>/dev/null | grep '[a-zA-Z]' | head -n 1)
+FC_INFO := $(shell LC_ALL=C ${FC} --version 2>/dev/null \
+    || LC_ALL=C ${FC} -V 2>/dev/null | grep '[a-zA-Z]' | head -n 1)
 
 
 SRCFILES = background_collisions.F90 balance.F90 bethe_heitler.F90 \
@@ -468,8 +468,8 @@ deck.o: deck.F90 bremsstrahlung.o custom_deck.o deck_boundaries_block.o \
   deck_control_block.o deck_dist_fn_block.o deck_fields_block.o \
   deck_injector_block.o deck_io_block.o deck_io_global_block.o \
   deck_laser_block.o deck_part_from_file_block.o deck_particle_probe_block.o \
-  deck_qed_block.o deck_species_block.o deck_stencil_block.o \
-  deck_subset_block.o deck_window_block.o photons.o strings.o utilities.o \
+  deck_qed_block.o deck_species_block.o deck_stencil_block.f90 \
+  deck_subset_block.o deck_window_block.f90 photons.o strings.o utilities.o \
   version_data.o $(SDFMOD)
 deck_boundaries_block.o: deck_boundaries_block.f90 strings_advanced.o \
   utilities.o

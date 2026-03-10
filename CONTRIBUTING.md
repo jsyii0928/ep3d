@@ -1,4 +1,5 @@
-
+画图指令：
+~/visit/visit3_4_2.linux-x86_64/bin/./visit
 # Contributions
 
 All contributions are welcome. EPOCH is designed to be flexible and

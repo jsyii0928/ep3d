@@ -22,6 +22,9 @@ MODULE laser
 
 CONTAINS
 
+  ! 初始化单个激光对象的属性
+  ! boundary: 入射边界索引
+  ! laser: 待初始化的激光块结构体
   SUBROUTINE init_laser(boundary, laser)
 
     INTEGER, INTENT(IN) :: boundary
@@ -38,13 +41,16 @@ CONTAINS
     laser%pol_angle = 0.0_num
     laser%t_start = 0.0_num
     laser%t_end = t_end
+    ! 记录激光随时间累积的相位积分 (用于处理变频激光)
     laser%current_integral_phase = 0.0_num
     NULLIFY(laser%profile)
     NULLIFY(laser%phase)
     NULLIFY(laser%next)
 
+    ! 根据边界类型分配空间分布和相位分布的数组空间
     CALL allocate_with_boundary(laser%profile, boundary)
     CALL allocate_with_boundary(laser%phase, boundary)
+    ! 默认分布为均匀分布 (profile=1.0)，初始相位为 0
     laser%profile = 1.0_num
     laser%phase = 0.0_num
 
@@ -52,6 +58,8 @@ CONTAINS
 
 
 
+  ! 设置所有激光的初始相位积分
+  ! 通常在从重启点恢复模拟时使用
   SUBROUTINE setup_laser_phases(phases)
 
     REAL(num), DIMENSION(:), INTENT(IN) :: phases
@@ -70,6 +78,7 @@ CONTAINS
 
 
 
+  ! 释放单个激光对象的内存
   SUBROUTINE deallocate_laser(laser)
 
     TYPE(laser_block), POINTER :: laser
@@ -90,6 +99,7 @@ CONTAINS
 
 
 
+  ! 释放所有已定义的激光对象的内存链表
   SUBROUTINE deallocate_lasers
 
     TYPE(laser_block), POINTER :: current, next
@@ -105,7 +115,7 @@ CONTAINS
 
 
 
-  ! Subroutine to attach a created laser object to the correct boundary
+  ! 将创建的激光对象挂载到全局激光链表的末尾
   SUBROUTINE attach_laser(laser)
 
     TYPE(laser_block), POINTER :: laser
@@ -114,6 +124,7 @@ CONTAINS
 
     boundary = laser%boundary
 
+    ! 增加该边界上的激光计数
     n_lasers(boundary) = n_lasers(boundary) + 1
 
     IF (ASSOCIATED(lasers)) THEN
@@ -130,30 +141,47 @@ CONTAINS
 
 
 
-  ! This routine populates the constant elements of a parameter pack
-  ! from a laser
-
+  ! 根据激光所在的边界，设置参数包中的坐标索引
+  ! parameters: 用于表达式求值的参数包
+  ! 这个函数的作用是为数学表达式及其求值器 (evaluator) 提供空间上下文。
+  ! 因为激光位于特定的模拟框边界上，所以该边界法线方向的坐标是固定的。
+  !
+  ! 例如：如果激光位于 x_min 边界，那么所有激光点的 ix 坐标都固定为 0。
+  ! 只有平行于边界平面的坐标 (例如 y 和 z) 会在后续的循环中变化。
+  !
+  ! 输入:
+  !   laser: 指向激光对象的指针，包含了边界信息 (laser%boundary)。
+  ! 输出:
+  !   parameters: 一个参数包结构体，将被传递给求值器来计算数学表达式。
   SUBROUTINE populate_pack_from_laser(laser, parameters)
 
     TYPE(laser_block), POINTER :: laser
     TYPE(parameter_pack), INTENT(INOUT) :: parameters
 
+    ! 初始化所有方向的网格索引为 0
     parameters%pack_ix = 0
     parameters%pack_iy = 0
     parameters%pack_iz = 0
 
+    ! 根据激光具体位于哪个边界，设置对应的固定坐标索引
     SELECT CASE(laser%boundary)
       CASE(c_bd_x_min)
+        ! 激光在 X 最小边界，固定 ix = 0
         parameters%pack_ix = 0
       CASE(c_bd_x_max)
+        ! 激光在 X 最大边界，固定 ix = nx (X方向网格最大值)
         parameters%pack_ix = nx
       CASE(c_bd_y_min)
+        ! 激光在 Y 最小边界，固定 iy = 0
         parameters%pack_iy = 0
       CASE(c_bd_y_max)
+        ! 激光在 Y 最大边界，固定 iy = ny
         parameters%pack_iy = ny
       CASE(c_bd_z_min)
+        ! 激光在 Z 最小边界，固定 iz = 0
         parameters%pack_iz = 0
       CASE(c_bd_z_max)
+        ! 激光在 Z 最大边界，固定 iz = nz
         parameters%pack_iz = nz
     END SELECT
 
@@ -161,6 +189,9 @@ CONTAINS
 
 
 
+  ! 计算激光的时间分布强度
+  ! 如果定义了 t_profile 函数，则评估该函数
+  ! 否则使用 custom_laser.f90 中的硬编码配置
   FUNCTION laser_time_profile(laser)
 
     TYPE(laser_block), POINTER :: laser
@@ -182,6 +213,7 @@ CONTAINS
 
 
 
+  ! 根据 user_deck 中定义的 phase 函数，更新激光在边界上的相位分布数组
   SUBROUTINE laser_update_phase(laser)
 
     TYPE(laser_block), POINTER :: laser
@@ -192,6 +224,7 @@ CONTAINS
     CALL populate_pack_from_laser(laser, parameters)
     SELECT CASE(laser%boundary)
       CASE(c_bd_x_min, c_bd_x_max)
+        ! 在 Y-Z 平面上循环更新相位
         DO j = 0,nz
           parameters%pack_iz = j
           DO i = 0,ny
@@ -201,6 +234,7 @@ CONTAINS
           END DO
         END DO
       CASE(c_bd_y_min, c_bd_y_max)
+        ! 在 X-Z 平面上循环更新相位
         DO j = 0,nz
           parameters%pack_iz = j
           DO i = 0,nx
@@ -210,6 +244,7 @@ CONTAINS
           END DO
         END DO
       CASE(c_bd_z_min, c_bd_z_max)
+        ! 在 X-Y 平面上循环更新相位
         DO j = 0,ny
           parameters%pack_iy = j
           DO i = 0,nx
@@ -224,6 +259,7 @@ CONTAINS
 
 
 
+  ! 根据 user_deck 中定义的 profile 函数，更新激光在边界上的空间强度分布数组
   SUBROUTINE laser_update_profile(laser)
 
     TYPE(laser_block), POINTER :: laser
@@ -269,6 +305,8 @@ CONTAINS
 
 
 
+  ! 更新激光的角频率 omega
+  ! 支持从频率 (Hz) 或波长 (m) 转换
   SUBROUTINE laser_update_omega(laser)
 
     TYPE(laser_block), POINTER :: laser
@@ -279,8 +317,10 @@ CONTAINS
     CALL populate_pack_from_laser(laser, parameters)
     laser%omega = &
         evaluate_with_parameters(laser%omega_function, parameters, err)
+    ! 转换频率 (f -> 2*pi*f)
     IF (laser%omega_func_type == c_of_freq) &
         laser%omega = 2.0_num * pi * laser%omega
+    ! 转换波长 (lambda -> 2*pi*c/lambda)
     IF (laser%omega_func_type == c_of_lambda) &
         laser%omega = 2.0_num * pi * c / laser%omega
 
@@ -288,6 +328,7 @@ CONTAINS
 
 
 
+  ! 在每个时间步更新所有启用变频的激光的频率和累积相位
   SUBROUTINE update_laser_omegas
 
     TYPE(laser_block), POINTER :: current
@@ -296,10 +337,9 @@ CONTAINS
     DO WHILE(ASSOCIATED(current))
       IF (current%use_omega_function) THEN
         CALL laser_update_omega(current)
+        ! 累加相位： phi = phi + omega * dt
         current%current_integral_phase = current%current_integral_phase &
             + current%omega * dt
-      ELSE
-        current%current_integral_phase = current%omega * time
       END IF
       current => current%next
     END DO
@@ -308,16 +348,20 @@ CONTAINS
 
 
 
+  ! 为特定的边界分配二维数组空间（用于 profile 和 phase）
   SUBROUTINE allocate_with_boundary(array, boundary)
 
     REAL(num), DIMENSION(:,:), POINTER :: array
     INTEGER, INTENT(IN) :: boundary
 
     IF (boundary == c_bd_x_min .OR. boundary == c_bd_x_max) THEN
+      ! 如果是 X 边界，分配 Y-Z 平面
       ALLOCATE(array(1-ng:ny+ng, 1-ng:nz+ng))
     ELSE IF (boundary == c_bd_y_min .OR. boundary == c_bd_y_max) THEN
+      ! 如果是 Y 边界，分配 X-Z 平面
       ALLOCATE(array(1-ng:nx+ng, 1-ng:nz+ng))
     ELSE IF (boundary == c_bd_z_min .OR. boundary == c_bd_z_max) THEN
+      ! 如果是 Z 边界，分配 X-Y 平面
       ALLOCATE(array(1-ng:nx+ng, 1-ng:ny+ng))
     END IF
 
@@ -325,6 +369,7 @@ CONTAINS
 
 
 
+  ! 根据激光频率计算激光模拟所需的时间步长限制
   SUBROUTINE set_laser_dt
 
     REAL(num) :: dt_local
@@ -334,12 +379,13 @@ CONTAINS
 
     current => lasers
     DO WHILE(ASSOCIATED(current))
+      ! 计算激光周期 T = 2*pi / omega
       dt_local = 2.0_num * pi / current%omega
       dt_laser = MIN(dt_laser, dt_local)
       current => current%next
     END DO
 
-    ! Need at least two iterations per laser period
+    ! 根据奈奎斯特采样定理，每个周期至少需要 2 个时间步
     ! (Nyquist)
     dt_laser = dt_laser / 2.0_num
 
@@ -347,6 +393,7 @@ CONTAINS
 
 
 
+  ! 处理 X 最小边界 (x_min) 的出射边界条件和激光注入
   SUBROUTINE outflow_bcs_x_min
 
     REAL(num) :: t_env
@@ -358,9 +405,11 @@ CONTAINS
     n = c_bd_x_min
 
     laserpos = 1
+    ! 如果使用了 CPML 吸收边界叠加激光
     IF (bc_field(n) == c_bc_cpml_laser) THEN
       laserpos = cpml_x_min_laser_idx
     END IF
+    ! 预计算系数以优化边界条件方程
     dtc2 = dt * c**2
     lx = dtc2 / dx
     ly = dtc2 / dy
@@ -374,21 +423,27 @@ CONTAINS
     source1 = 0.0_num
     source2 = 0.0_num
 
+    ! 同步边界上的磁场 bx
     bx(laserpos-1, 0:ny, 0:nz) = bx_x_min(0:ny, 0:nz)
 
+    ! 如果该边界上有激光需要注入
     IF (add_laser(n)) THEN
       current => lasers
       DO WHILE(ASSOCIATED(current))
         IF (current%boundary == c_bd_x_min) THEN
-          ! evaluate the temporal evolution of the laser
+          ! 评估激光随时间的演化：只在 [t_start, t_end] 范围内有效
           IF (time >= current%t_start .AND. time <= current%t_end) THEN
+            ! 如果设置了动态变化的相位或剖面函数，则更新它们
             IF (current%use_phase_function) CALL laser_update_phase(current)
             IF (current%use_profile_function) CALL laser_update_profile(current)
+            ! 计算时间包络强度
             t_env = laser_time_profile(current) * current%amp
             DO j = 0,nz
             DO i = 0,ny
+              ! 计算激光电场矢量： base = amp * profile * sin(phase_integral + phase_offset)
               base = t_env * current%profile(i,j) &
                 * SIN(current%current_integral_phase + current%phase(i,j))
+              ! 根据偏振角分解到两个分量 (S 与 P 偏振)
               source1(i,j) = source1(i,j) + base * COS(current%pol_angle)
               source2(i,j) = source2(i,j) + base * SIN(current%pol_angle)
             END DO
@@ -399,6 +454,7 @@ CONTAINS
       END DO
     END IF
 
+    ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
     bz(laserpos-1, 0:ny, 0:nz) = sum * ( 4.0_num * source1 &
         + 2.0_num * (ey_x_min(0:ny, 0:nz) + c * bz_x_min(0:ny, 0:nz)) &
         - 2.0_num * ey(laserpos, 0:ny, 0:nz) &
@@ -415,6 +471,7 @@ CONTAINS
 
     DEALLOCATE(source1, source2)
 
+    ! 如果启用了能量吸收计算
     IF (dump_absorption) THEN
       IF (add_laser(n)) THEN
         CALL calc_absorption(c_bd_x_min, lasers=lasers)
@@ -454,21 +511,27 @@ CONTAINS
     source1 = 0.0_num
     source2 = 0.0_num
 
+    ! 同步边界上的磁场 bx
     bx(laserpos+1, 0:ny, 0:nz) = bx_x_max(0:ny, 0:nz)
 
+    ! 如果该边界上有激光需要注入
     IF (add_laser(n)) THEN
       current => lasers
       DO WHILE(ASSOCIATED(current))
         IF (current%boundary == c_bd_x_max) THEN
-          ! evaluate the temporal evolution of the laser
+          ! 评估激光随时间的演化：只在 [t_start, t_end] 范围内有效
           IF (time >= current%t_start .AND. time <= current%t_end) THEN
+            ! 如果设置了动态变化的相位或剖面函数，则更新它们
             IF (current%use_phase_function) CALL laser_update_phase(current)
             IF (current%use_profile_function) CALL laser_update_profile(current)
+            ! 计算时间包络强度
             t_env = laser_time_profile(current) * current%amp
             DO j = 0,nz
             DO i = 0,ny
+              ! 计算激光电场矢量： base = amp * profile * sin(phase_integral + phase_offset)
               base = t_env * current%profile(i,j) &
                 * SIN(current%current_integral_phase + current%phase(i,j))
+              ! 根据偏振角分解到两个分量 (S 与 P 偏振)
               source1(i,j) = source1(i,j) + base * COS(current%pol_angle)
               source2(i,j) = source2(i,j) + base * SIN(current%pol_angle)
             END DO
@@ -479,6 +542,7 @@ CONTAINS
       END DO
     END IF
 
+    ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
     bz(laserpos, 0:ny, 0:nz) = sum * (-4.0_num * source1 &
         - 2.0_num * (ey_x_max(0:ny, 0:nz) - c * bz_x_max(0:ny, 0:nz)) &
         + 2.0_num * ey(laserpos, 0:ny, 0:nz) &
@@ -495,6 +559,7 @@ CONTAINS
 
     DEALLOCATE(source1, source2)
 
+    ! 如果启用了能量吸收计算
     IF (dump_absorption) THEN
       IF (add_laser(n)) THEN
         CALL calc_absorption(c_bd_x_max, lasers=lasers)
@@ -534,21 +599,27 @@ CONTAINS
     source1 = 0.0_num
     source2 = 0.0_num
 
+    ! 同步边界上的磁场 by
     by(0:nx, laserpos-1, 0:nz) = by_y_min(0:nx, 0:nz)
 
+    ! 如果该边界上有激光需要注入
     IF (add_laser(n)) THEN
       current => lasers
       DO WHILE(ASSOCIATED(current))
         IF (current%boundary == c_bd_y_min) THEN
-          ! evaluate the temporal evolution of the laser
+          ! 评估激光随时间的演化：只在 [t_start, t_end] 范围内有效
           IF (time >= current%t_start .AND. time <= current%t_end) THEN
+            ! 如果设置了动态变化的相位或剖面函数，则更新它们
             IF (current%use_phase_function) CALL laser_update_phase(current)
             IF (current%use_profile_function) CALL laser_update_profile(current)
+            ! 计算时间包络强度
             t_env = laser_time_profile(current) * current%amp
             DO j = 0,nz
             DO i = 0,nx
+              ! 计算激光电场矢量： base = amp * profile * sin(phase_integral + phase_offset)
               base = t_env * current%profile(i,j) &
                 * SIN(current%current_integral_phase + current%phase(i,j))
+              ! 根据偏振角分解到两个分量 (S 与 P 偏振)
               source1(i,j) = source1(i,j) + base * COS(current%pol_angle)
               source2(i,j) = source2(i,j) + base * SIN(current%pol_angle)
             END DO
@@ -559,6 +630,7 @@ CONTAINS
       END DO
     END IF
 
+    ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
     bx(0:nx, laserpos-1, 0:nz) = sum * ( 4.0_num * source1 &
         + 2.0_num * (ez_y_min(0:nx, 0:nz) + c * bx_y_min(0:nx, 0:nz)) &
         - 2.0_num * ez(0:nx, laserpos, 0:nz) &
@@ -575,6 +647,7 @@ CONTAINS
 
     DEALLOCATE(source1, source2)
 
+    ! 如果启用了能量吸收计算
     IF (dump_absorption) THEN
       IF (add_laser(n)) THEN
         CALL calc_absorption(c_bd_y_min, lasers=lasers)
@@ -614,21 +687,27 @@ CONTAINS
     source1 = 0.0_num
     source2 = 0.0_num
 
+    ! 同步边界上的磁场 by
     by(0:nx, laserpos+1, 0:nz) = by_y_max(0:nx, 0:nz)
 
+    ! 如果该边界上有激光需要注入
     IF (add_laser(n)) THEN
       current => lasers
       DO WHILE(ASSOCIATED(current))
         IF (current%boundary == c_bd_y_max) THEN
-          ! evaluate the temporal evolution of the laser
+          ! 评估激光随时间的演化：只在 [t_start, t_end] 范围内有效
           IF (time >= current%t_start .AND. time <= current%t_end) THEN
+            ! 如果设置了动态变化的相位或剖面函数，则更新它们
             IF (current%use_phase_function) CALL laser_update_phase(current)
             IF (current%use_profile_function) CALL laser_update_profile(current)
+            ! 计算时间包络强度
             t_env = laser_time_profile(current) * current%amp
             DO j = 0,nz
             DO i = 0,nx
+              ! 计算激光电场矢量： base = amp * profile * sin(phase_integral + phase_offset)
               base = t_env * current%profile(i,j) &
                 * SIN(current%current_integral_phase + current%phase(i,j))
+              ! 根据偏振角分解到两个分量 (S 与 P 偏振)
               source1(i,j) = source1(i,j) + base * COS(current%pol_angle)
               source2(i,j) = source2(i,j) + base * SIN(current%pol_angle)
             END DO
@@ -639,22 +718,24 @@ CONTAINS
       END DO
     END IF
 
-    bx(0:nx, laserpos, 0:nz) = sum * (-4.0_num * source1 &
-        - 2.0_num * (ez_y_max(0:nx, 0:nz) - c * bx_y_max(0:nx, 0:nz)) &
-        + 2.0_num * ez(0:nx, laserpos, 0:nz) &
-        + lx * (by(0:nx, laserpos, 0:nz) - by(-1:nx-1, laserpos, 0:nz)) &
-        - dt_eps * jz(0:nx, laserpos, 0:nz) &
-        + diff * bx(0:nx, laserpos-1, 0:nz))
+    ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
+    bz(laserpos, 0:ny, 0:nz) = sum * (-4.0_num * source1 &
+        - 2.0_num * (ey_x_max(0:ny, 0:nz) - c * bz_x_max(0:ny, 0:nz)) &
+        + 2.0_num * ey(laserpos, 0:ny, 0:nz) &
+        + lz * (bx(laserpos, 0:ny, 0:nz) - bx(laserpos, 0:ny, -1:nz-1)) &
+        - dt_eps * jy(laserpos, 0:ny, 0:nz) &
+        + diff * bz(laserpos-1, 0:ny, 0:nz))
 
-    bz(0:nx, laserpos, 0:nz) = sum * ( 4.0_num * source2 &
-        + 2.0_num * (ex_y_max(0:nx, 0:nz) + c * bz_y_max(0:nx, 0:nz)) &
-        - 2.0_num * ex(0:nx, laserpos, 0:nz) &
-        + lz * (by(0:nx, laserpos, 0:nz) - by(0:nx, laserpos, -1:nz-1)) &
-        + dt_eps * jx(0:nx, laserpos, 0:nz) &
-        + diff * bz(0:nx, laserpos-1, 0:nz))
+    by(laserpos, 0:ny, 0:nz) = sum * ( 4.0_num * source2 &
+        + 2.0_num * (ez_x_max(0:ny, 0:nz) + c * by_x_max(0:ny, 0:nz)) &
+        - 2.0_num * ez(laserpos, 0:ny, 0:nz) &
+        + ly * (bx(laserpos, 0:ny, 0:nz) - bx(laserpos, -1:ny-1, 0:nz)) &
+        + dt_eps * jz(laserpos, 0:ny, 0:nz) &
+        + diff * by(laserpos-1, 0:ny, 0:nz))
 
     DEALLOCATE(source1, source2)
 
+    ! 如果启用了能量吸收计算
     IF (dump_absorption) THEN
       IF (add_laser(n)) THEN
         CALL calc_absorption(c_bd_y_max, lasers=lasers)
@@ -694,21 +775,27 @@ CONTAINS
     source1 = 0.0_num
     source2 = 0.0_num
 
+    ! 同步边界上的磁场 bz
     bz(0:nx, 0:ny, laserpos-1) = bz_z_min(0:nx, 0:ny)
 
+    ! 如果该边界上有激光需要注入
     IF (add_laser(n)) THEN
       current => lasers
       DO WHILE(ASSOCIATED(current))
         IF (current%boundary == c_bd_z_min) THEN
-          ! evaluate the temporal evolution of the laser
+          ! 评估激光随时间的演化：只在 [t_start, t_end] 范围内有效
           IF (time >= current%t_start .AND. time <= current%t_end) THEN
+            ! 如果设置了动态变化的相位或剖面函数，则更新它们
             IF (current%use_phase_function) CALL laser_update_phase(current)
             IF (current%use_profile_function) CALL laser_update_profile(current)
+            ! 计算时间包络强度
             t_env = laser_time_profile(current) * current%amp
             DO j = 0,ny
             DO i = 0,nx
+              ! 计算激光电场矢量： base = amp * profile * sin(phase_integral + phase_offset)
               base = t_env * current%profile(i,j) &
                 * SIN(current%current_integral_phase + current%phase(i,j))
+              ! 根据偏振角分解到两个分量 (S 与 P 偏振)
               source1(i,j) = source1(i,j) + base * COS(current%pol_angle)
               source2(i,j) = source2(i,j) + base * SIN(current%pol_angle)
             END DO
@@ -719,6 +806,7 @@ CONTAINS
       END DO
     END IF
 
+    ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
     by(0:nx, 0:ny, laserpos-1) = sum * ( 4.0_num * source1 &
         + 2.0_num * (ex_z_min(0:nx, 0:ny) + c * by_z_min(0:nx, 0:ny)) &
         - 2.0_num * ex(0:nx, 0:ny, laserpos) &
@@ -735,6 +823,7 @@ CONTAINS
 
     DEALLOCATE(source1, source2)
 
+    ! 如果启用了能量吸收计算
     IF (dump_absorption) THEN
       IF (add_laser(n)) THEN
         CALL calc_absorption(c_bd_z_min, lasers=lasers)
@@ -774,21 +863,27 @@ CONTAINS
     source1 = 0.0_num
     source2 = 0.0_num
 
+    ! 同步边界上的磁场 bz
     bz(0:nx, 0:ny, laserpos+1) = bz_z_max(0:nx, 0:ny)
 
+    ! 如果该边界上有激光需要注入
     IF (add_laser(n)) THEN
       current => lasers
       DO WHILE(ASSOCIATED(current))
         IF (current%boundary == c_bd_z_max) THEN
-          ! evaluate the temporal evolution of the laser
+          ! 评估激光随时间的演化：只在 [t_start, t_end] 范围内有效
           IF (time >= current%t_start .AND. time <= current%t_end) THEN
+            ! 如果设置了动态变化的相位或剖面函数，则更新它们
             IF (current%use_phase_function) CALL laser_update_phase(current)
             IF (current%use_profile_function) CALL laser_update_profile(current)
+            ! 计算时间包络强度
             t_env = laser_time_profile(current) * current%amp
             DO j = 0,ny
             DO i = 0,nx
+              ! 计算激光电场矢量： base = amp * profile * sin(phase_integral + phase_offset)
               base = t_env * current%profile(i,j) &
                 * SIN(current%current_integral_phase + current%phase(i,j))
+              ! 根据偏振角分解到两个分量 (S 与 P 偏振)
               source1(i,j) = source1(i,j) + base * COS(current%pol_angle)
               source2(i,j) = source2(i,j) + base * SIN(current%pol_angle)
             END DO
@@ -799,6 +894,7 @@ CONTAINS
       END DO
     END IF
 
+    ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
     by(0:nx, 0:ny, laserpos) = sum * (-4.0_num * source1 &
         - 2.0_num * (ex_z_max(0:nx, 0:ny) - c * by_z_max(0:nx, 0:ny)) &
         + 2.0_num * ex(0:nx, 0:ny, laserpos) &
@@ -815,6 +911,7 @@ CONTAINS
 
     DEALLOCATE(source1, source2)
 
+    ! 如果启用了能量吸收计算
     IF (dump_absorption) THEN
       IF (add_laser(n)) THEN
         CALL calc_absorption(c_bd_z_max, lasers=lasers)
