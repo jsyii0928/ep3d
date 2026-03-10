@@ -32,6 +32,7 @@ contains
    end function wrapToPi
 
    subroutine gpulse_init()
+      USE shared_data, ONLY: rank, comm, errcode
       type(Geometry) :: geom
       type(Spectrum) :: spec
       integer :: n_x, n_y, total_src, total_pixels, n, s, k
@@ -50,12 +51,6 @@ contains
 
       if (is_initialized) return
 
-      ! 尝试从缓存加载
-      if (load_cache()) then
-         is_initialized = .true.
-         return
-      end if
-
       n_x = num_x
       n_y = num_y
       range_val = RANGE
@@ -63,8 +58,8 @@ contains
       g_field%N_pixels_x = n_x
       g_field%N_pixels_y = n_y
       g_field%N_freq = N_FREQ
-      allocate(g_field%data(n_x * n_y * N_FREQ))
-      allocate(g_field%omegas(N_FREQ))
+      if (.not. allocated(g_field%data)) allocate(g_field%data(n_x * n_y * N_FREQ))
+      if (.not. allocated(g_field%omegas)) allocate(g_field%omegas(N_FREQ))
 
       g_field%min_x = -range_val
       g_field%max_x = range_val
@@ -73,152 +68,171 @@ contains
       g_field%dx = (2.0_dp * range_val) / real(max(1, n_x - 1), dp)
       g_field%dy = (2.0_dp * range_val) / real(max(1, n_y - 1), dp)
 
-      print *, "[Gpulse] Initializing Field Solver (Fortran)..."
+      print *, "[Gpulse] Rank ", rank, " Initializing Field Solver (Fortran)..."
 
-      geom = build_geometry()
-      spec = calculate_spectrum()
-      total_src = geom%total_points
+      ! 仅 rank 0 负责计算或检查缓存
+      if (rank == 0) then
+         if (.not. load_cache()) then
 
-      g_field%omegas = spec%omega_list
+            geom = build_geometry()
+            spec = calculate_spectrum()
+            total_src = geom%total_points
 
-      allocate(xf(n_x * n_y), yf(n_x * n_y))
-      do ix = 1, n_x
-         do iy = 1, n_y
-            idx = (ix - 1) * n_y + iy
-            xf(idx) = -range_val + real(ix - 1, dp) * g_field%dx
-            yf(idx) = -range_val + real(iy - 1, dp) * g_field%dy
-         end do
-      end do
+            g_field%omegas = spec%omega_list
 
-      ! 偏振映射：与 C++ run_solver 完全匹配的 wrapToPi + 分支逻辑
-      allocate(cos_2psi(total_src), sin_2psi(total_src))
-      aa = PI / 4.0_dp
-      do s = 1, total_src
-         if (RADIAL == 1) then
-            theta_rot = wrapToPi(geom%theta(s) + PI / 4.0_dp)
-            if (theta_rot >= 0.0_dp .and. theta_rot < PI / 2.0_dp) then
-               psi = aa           ! PI/4
-            else if (theta_rot >= PI / 2.0_dp .and. theta_rot <= PI) then
-               psi = 2.0_dp * aa  ! PI/2
-            else if (theta_rot >= -PI .and. theta_rot < -PI / 2.0_dp) then
-               psi = 3.0_dp * aa  ! 3*PI/4
-            else
-               psi = 0.0_dp       ! [-PI/2, 0)
-            end if
-         else
-            psi = 0.0_dp
-         end if
-         cos_2psi(s) = cos(2.0_dp * psi)
-         sin_2psi(s) = sin(2.0_dp * psi)
-      end do
-
-      allocate(vec_NxB_x(total_src), vec_NxB_y(total_src), vec_NxB_z(total_src))
-      allocate(vec_N_dot_E(total_src))
-
-      t0 = 2.0_dp * F0 / C_CONST
-      total_pixels = n_x * n_y
-      factor = 1.0_dp / (2.0_dp * PI)
-
-      do n = 1, N_FREQ
-         wn = spec%omega_list(n)
-         lam_n = 2.0_dp * PI * C_CONST / wn
-         kn = 2.0_dp * PI * 1.0_dp / lam_n
-         E0_curr = spec%E_amp(n)
-
-         time_comp_phase = exp(-I_COMP * wn * t0)
-         common_phase = exp(-I_COMP * PI / 2.0_dp) * time_comp_phase
-
-         !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(s, r, gaussian_phase, phase_factor, &
-         !$OMP E_scalar, Ex, Ey, Ez, Bx, By, Bz, nx, ny, nz, freq_weight)
-         do s = 1, total_src
-            r = geom%r(s)
-            gaussian_phase = exp(- (r / W0)**2)
-            phase_factor = exp(-I_COMP * kn * geom%z(s)) * common_phase
-            E_scalar = E0_curr * gaussian_phase * phase_factor
-
-            nx = geom%Nx(s)
-            ny = geom%Ny(s)
-            nz = geom%Nz(s)
-
-            if (RADIAL == 1) then
-               Ex = E_scalar * sin_2psi(s)
-               Ey = -E_scalar * cos_2psi(s)
-               Ez = (0.0_dp, 0.0_dp)
-               Bx = (E_scalar / C_CONST) * cos_2psi(s)
-               By = (E_scalar / C_CONST) * sin_2psi(s)
-               Bz = (0.0_dp, 0.0_dp)
-            else
-               Ex = (0.0_dp, 0.0_dp)
-               Ey = E_scalar
-               Ez = (0.0_dp, 0.0_dp)
-               Bx = E_scalar / C_CONST
-               By = (0.0_dp, 0.0_dp)
-               Bz = (0.0_dp, 0.0_dp)
-            end if
-
-            ! Pre-multiply by dS(s) and other constants once
-            freq_weight = spec%weights(n) * factor
-            vec_NxB_x(s) = (ny * Bz - nz * By) * geom%dS(s) * freq_weight
-            vec_NxB_y(s) = (nz * Bx - nx * Bz) * geom%dS(s) * freq_weight
-            vec_NxB_z(s) = (nx * By - ny * Bx) * geom%dS(s) * freq_weight
-            vec_N_dot_E(s) = (nx * Ex + ny * Ey + nz * Ez) * geom%dS(s) * freq_weight
-         end do
-         !$OMP END PARALLEL DO
-
-         freq_weight = spec%weights(n)
-
-         if (n == 1) then
-            print *, "DEBUG F90: freq_weight=", freq_weight, " factor=", factor
-         end if
-
-         !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(k, obs_x, obs_y, obs_z, &
-         !$OMP sEx, sEy, sEz, sBx, sBy, sBz, s, key_Rx, key_Ry, key_Rz, &
-         !$OMP R_sq, R_norm, G, dG, nxe, idx)
-         do k = 1, total_pixels
-            obs_x = xf(k)
-            obs_y = yf(k)
-            obs_z = 0.0_dp
-
-            sEx = (0.0_dp, 0.0_dp); sEy = (0.0_dp, 0.0_dp); sEz = (0.0_dp, 0.0_dp)
-            sBx = (0.0_dp, 0.0_dp); sBy = (0.0_dp, 0.0_dp); sBz = (0.0_dp, 0.0_dp)
-
-            do s = 1, total_src
-               key_Rx = obs_x - geom%x(s)
-               key_Ry = obs_y - geom%y(s)
-               key_Rz = obs_z - geom%z(s)
-               R_sq = key_Rx * key_Rx + key_Ry * key_Ry + key_Rz * key_Rz
-               R_norm = sqrt(R_sq)
-
-               G = exp(I_COMP * kn * R_norm) / R_norm
-               dG = (I_COMP * kn / R_norm - 1.0_dp / R_sq) * G
-               nxe = vec_N_dot_E(s)
-
-               sEx = sEx + (I_COMP * wn * vec_NxB_x(s) * G + nxe * dG * key_Rx)
-               sEy = sEy + (I_COMP * wn * vec_NxB_y(s) * G + nxe * dG * key_Ry)
-               sEz = sEz + (I_COMP * wn * vec_NxB_z(s) * G + nxe * dG * key_Rz)
-
-               sBx = sBx + (vec_NxB_y(s) * (dG * key_Rz) - vec_NxB_z(s) * (dG * key_Ry))
-               sBy = sBy + (vec_NxB_z(s) * (dG * key_Rx) - vec_NxB_x(s) * (dG * key_Rz))
-               sBz = sBz + (vec_NxB_x(s) * (dG * key_Ry) - vec_NxB_y(s) * (dG * key_Rx))
+            allocate(xf(n_x * n_y), yf(n_x * n_y))
+            do ix = 1, n_x
+               do iy = 1, n_y
+                  idx = (ix - 1) * n_y + iy
+                  xf(idx) = -range_val + real(ix - 1, dp) * g_field%dx
+                  yf(idx) = -range_val + real(iy - 1, dp) * g_field%dy
+               end do
             end do
 
-            idx = (k - 1) * N_FREQ + n
-            g_field%data(idx)%Ex = sEx
-            g_field%data(idx)%Ey = sEy
-            g_field%data(idx)%Ez = sEz
-            g_field%data(idx)%Bx = sBx
-            g_field%data(idx)%By = sBy
-            g_field%data(idx)%Bz = sBz
-         end do
-         ! print progress
-         if (mod(n, 10) == 0 .or. n == 1 .or. n == N_FREQ) then
-            print *, "  Calculated freq ", n, "/", N_FREQ
+            ! 偏振映射：与 C++ run_solver 完全匹配的 wrapToPi + 分支逻辑
+            allocate(cos_2psi(total_src), sin_2psi(total_src))
+            aa = PI / 4.0_dp
+            do s = 1, total_src
+               if (RADIAL == 1) then
+                  theta_rot = wrapToPi(geom%theta(s) + PI / 4.0_dp)
+                  if (theta_rot >= 0.0_dp .and. theta_rot < PI / 2.0_dp) then
+                     psi = aa           ! PI/4
+                  else if (theta_rot >= PI / 2.0_dp .and. theta_rot <= PI) then
+                     psi = 2.0_dp * aa  ! PI/2
+                  else if (theta_rot >= -PI .and. theta_rot < -PI / 2.0_dp) then
+                     psi = 3.0_dp * aa  ! 3*PI/4
+                  else
+                     psi = 0.0_dp       ! [-PI/2, 0)
+                  end if
+               else
+                  psi = 0.0_dp
+               end if
+               cos_2psi(s) = cos(2.0_dp * psi)
+               sin_2psi(s) = sin(2.0_dp * psi)
+            end do
+
+            allocate(vec_NxB_x(total_src), vec_NxB_y(total_src), vec_NxB_z(total_src))
+            allocate(vec_N_dot_E(total_src))
+
+            t0 = 2.0_dp * F0 / C_CONST
+            total_pixels = n_x * n_y
+            factor = 1.0_dp / (2.0_dp * PI)
+
+            do n = 1, N_FREQ
+               wn = spec%omega_list(n)
+               lam_n = 2.0_dp * PI * C_CONST / wn
+               kn = 2.0_dp * PI * 1.0_dp / lam_n
+               E0_curr = spec%E_amp(n)
+
+               time_comp_phase = exp(-I_COMP * wn * t0)
+               common_phase = exp(-I_COMP * PI / 2.0_dp) * time_comp_phase
+
+               !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(s, r, gaussian_phase, phase_factor, &
+               !$OMP E_scalar, Ex, Ey, Ez, Bx, By, Bz, nx, ny, nz, freq_weight)
+               do s = 1, total_src
+                  r = geom%r(s)
+                  gaussian_phase = exp(- (r / W0)**2)
+                  phase_factor = exp(-I_COMP * kn * geom%z(s)) * common_phase
+                  E_scalar = E0_curr * gaussian_phase * phase_factor
+
+                  nx = geom%Nx(s)
+                  ny = geom%Ny(s)
+                  nz = geom%Nz(s)
+
+                  if (RADIAL == 1) then
+                     Ex = E_scalar * sin_2psi(s)
+                     Ey = -E_scalar * cos_2psi(s)
+                     Ez = (0.0_dp, 0.0_dp)
+                     Bx = (E_scalar / C_CONST) * cos_2psi(s)
+                     By = (E_scalar / C_CONST) * sin_2psi(s)
+                     Bz = (0.0_dp, 0.0_dp)
+                  else
+                     Ex = (0.0_dp, 0.0_dp)
+                     Ey = E_scalar
+                     Ez = (0.0_dp, 0.0_dp)
+                     Bx = E_scalar / C_CONST
+                     By = (0.0_dp, 0.0_dp)
+                     Bz = (0.0_dp, 0.0_dp)
+                  end if
+
+                  ! Pre-multiply by dS(s) and other constants once
+                  freq_weight = spec%weights(n) * factor
+                  vec_NxB_x(s) = (ny * Bz - nz * By) * geom%dS(s) * freq_weight
+                  vec_NxB_y(s) = (nz * Bx - nx * Bz) * geom%dS(s) * freq_weight
+                  vec_NxB_z(s) = (nx * By - ny * Bx) * geom%dS(s) * freq_weight
+                  vec_N_dot_E(s) = (nx * Ex + ny * Ey + nz * Ez) * geom%dS(s) * freq_weight
+               end do
+               !$OMP END PARALLEL DO
+
+               freq_weight = spec%weights(n)
+
+               if (n == 1) then
+                  print *, "DEBUG F90: freq_weight=", freq_weight, " factor=", factor
+               end if
+
+               !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(k, obs_x, obs_y, obs_z, &
+               !$OMP sEx, sEy, sEz, sBx, sBy, sBz, s, key_Rx, key_Ry, key_Rz, &
+               !$OMP R_sq, R_norm, G, dG, nxe, idx)
+               do k = 1, total_pixels
+                  obs_x = xf(k)
+                  obs_y = yf(k)
+                  obs_z = 0.0_dp
+
+                  sEx = (0.0_dp, 0.0_dp); sEy = (0.0_dp, 0.0_dp); sEz = (0.0_dp, 0.0_dp)
+                  sBx = (0.0_dp, 0.0_dp); sBy = (0.0_dp, 0.0_dp); sBz = (0.0_dp, 0.0_dp)
+
+                  do s = 1, total_src
+                     key_Rx = obs_x - geom%x(s)
+                     key_Ry = obs_y - geom%y(s)
+                     key_Rz = obs_z - geom%z(s)
+                     R_sq = key_Rx * key_Rx + key_Ry * key_Ry + key_Rz * key_Rz
+                     R_norm = sqrt(R_sq)
+
+                     G = exp(I_COMP * kn * R_norm) / R_norm
+                     dG = (I_COMP * kn / R_norm - 1.0_dp / R_sq) * G
+                     nxe = vec_N_dot_E(s)
+
+                     sEx = sEx + (I_COMP * wn * vec_NxB_x(s) * G + nxe * dG * key_Rx)
+                     sEy = sEy + (I_COMP * wn * vec_NxB_y(s) * G + nxe * dG * key_Ry)
+                     sEz = sEz + (I_COMP * wn * vec_NxB_z(s) * G + nxe * dG * key_Rz)
+
+                     sBx = sBx + (vec_NxB_y(s) * (dG * key_Rz) - vec_NxB_z(s) * (dG * key_Ry))
+                     sBy = sBy + (vec_NxB_z(s) * (dG * key_Rx) - vec_NxB_x(s) * (dG * key_Rz))
+                     sBz = sBz + (vec_NxB_x(s) * (dG * key_Ry) - vec_NxB_y(s) * (dG * key_Rx))
+                  end do
+
+                  idx = (k - 1) * N_FREQ + n
+                  g_field%data(idx)%Ex = sEx
+                  g_field%data(idx)%Ey = sEy
+                  g_field%data(idx)%Ez = sEz
+                  g_field%data(idx)%Bx = sBx
+                  g_field%data(idx)%By = sBy
+                  g_field%data(idx)%Bz = sBz
+               end do
+               ! print progress
+               if (mod(n, 10) == 0 .or. n == 1 .or. n == N_FREQ) then
+                  print *, "  Calculated freq ", n, "/", N_FREQ
+               end if
+            end do
+
+            call save_cache()
+            print *, "[Gpulse] Rank ", rank, " Initialization Complete."
          end if
-      end do
+      end if
+
+      ! 同步所有 MPI 进程，确保 rank 0 的缓存写入完成
+      CALL MPI_BARRIER(comm, errcode)
+
+      ! 非 0 进程加载由 rank 0 生成的缓存
+      if (rank /= 0) then
+         if (.not. load_cache()) then
+            print *, "[Gpulse] ERROR: Rank ", rank, " failed to load cache."
+            ! 如果缓存加载失败，由于程序是并行运行的，这里最好终止
+            CALL MPI_ABORT(comm, 1, errcode)
+         end if
+      end if
 
       is_initialized = .true.
-      call save_cache()
-      print *, "[Gpulse] Initialization Complete."
    end subroutine gpulse_init
 
    subroutine gpulse_free()
