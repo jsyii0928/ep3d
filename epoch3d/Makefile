@@ -175,6 +175,11 @@ LDFLAGS = $(FFLAGS) -L$(SDF)/lib -lsdf
 # Set some of the build parameters
 TARGET = epoch3d
 
+SOURCES = \
+  gpulse_constants.f90 \
+  gpulse.f90 \
+  laser.f90
+
 # Set pre-processor defines
 DEFINES := $(DEFINE)
 
@@ -317,7 +322,8 @@ SRCFILES = background_collisions.F90 balance.F90 bethe_heitler.F90 \
 	deck_particle_probe_block.F90 deck_qed_block.F90 deck_species_block.F90 \
 	deck_stencil_block.f90 deck_subset_block.F90 deck_window_block.f90 \
 	deltaf_loader.F90 diagnostics.F90 dist_fn.F90 epoch3d.F90 evaluate.F90 \
-	evaluator_blocks.F90 fields.f90 file_injectors.F90 finish.f90 helper.F90 \
+	evaluator_blocks.F90 fields.f90 file_injectors.F90 finish.f90 \
+	gpulse_constants.f90 gpulse.f90 helper.F90 \
 	ic_module.f90 injectors.F90 ionise.F90 iterators.F90 laser.f90 \
 	mpi_routines.F90 mpi_subtype_control.f90 numerics.f90 particle_id_hash.F90 \
 	particle_migration.F90 particle_pointer_advance.f90 particle_temperature.F90 \
@@ -560,3 +566,5 @@ utilities.o: utilities.f90 constants.o shared_data.o
 version_data.o: version_data.F90 $(SRCDIR)/COMMIT
 welcome.o: welcome.F90 shared_data.o terminal_controls.o version_data.o
 window.o: window.F90 boundary.o evaluate.o partlist.o
+laser.o: gpulse.o
+gpulse.o: gpulse_constants.o
