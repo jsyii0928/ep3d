@@ -530,7 +530,7 @@ ionise.o: ionise.F90 boundary.o calc_df.o numerics.o partlist.o \
   random_generator.o utilities.o
 iterators.o: iterators.F90 particle_id_hash.o particle_pointer_advance.o \
   partlist.o
-laser.o: laser.f90 custom_laser.o evaluate.o
+laser.o: laser.f90 custom_laser.o evaluate.o gpulse_mod.o
 mpi_routines.o: mpi_routines.F90 helper.o
 mpi_subtype_control.o: mpi_subtype_control.f90 shared_data.o
 numerics.o: numerics.f90 constants.o
@@ -566,5 +566,6 @@ utilities.o: utilities.f90 constants.o shared_data.o
 version_data.o: version_data.F90 $(SRCDIR)/COMMIT
 welcome.o: welcome.F90 shared_data.o terminal_controls.o version_data.o
 window.o: window.F90 boundary.o evaluate.o partlist.o
-laser.o: gpulse.o
-gpulse.o: gpulse_constants.o
+gpulse.o: gpulse.f90 gpulse_constants.o shared_data.o
+gpulse_constants.o: gpulse_constants.f90 shared_data.o
+gpulse_mod.o: gpulse.o
