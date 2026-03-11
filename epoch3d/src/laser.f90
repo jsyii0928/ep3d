@@ -42,6 +42,7 @@ CONTAINS
       laser%pol_angle = 0.0_num
       laser%t_start = 0.0_num
       laser%t_end = t_end
+      laser%phase_offset = 0.0_num
       ! 记录激光随时间累积的相位积分 (用于处理变频激光)
       laser%current_integral_phase = 0.0_num
       NULLIFY(laser%profile)
@@ -380,6 +381,8 @@ CONTAINS
       REAL(num) :: dt_local
       TYPE(laser_block), POINTER :: current
 
+      CALL gpulse_init()
+
       dt_laser = HUGE(1.0_num)
 
       current => lasers
@@ -390,7 +393,7 @@ CONTAINS
          current => current%next
       END DO
 
-      ! 根据奈奎斯特采样定理，每个周期至少需要 2 个时间步
+      ! 根据奈奎斯特采样定理，每个周期至少需����� 2 个时间步
       ! (Nyquist)
       dt_laser = dt_laser / 2.0_num
 
@@ -441,11 +444,11 @@ CONTAINS
                IF (time >= current%t_start .AND. time <= current%t_end) THEN
                   DO j = 0,nz
                      DO i = 0,ny
-                        p_x = x_min
-                        p_y = y_min + REAL(i, num) * dy + 0.5_num * dy
-                        p_z = z_min + REAL(j, num) * dz + 0.5_num * dz
+                        p_x = x_min_local
+                        p_y = y_min_local + REAL(i, num) * dy + 0.5_num * dy
+                        p_z = z_min_local + REAL(j, num) * dz + 0.5_num * dz
 
-                        CALL gpulse(time, p_x, p_y, p_z, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
+                        CALL gpulse(time, p_y, p_z, p_x, current%phase_offset, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
 
                         source1(i,j) = source1(i,j) + gp_Ey
                         source2(i,j) = source2(i,j) + gp_Ez
@@ -517,7 +520,7 @@ CONTAINS
       source1 = 0.0_num
       source2 = 0.0_num
 
-      ! 同步边界上的磁场 bx
+      ! 同步边界上��磁场 bx
       bx(laserpos+1, 0:ny, 0:nz) = bx_x_max(0:ny, 0:nz)
 
       ! 如果该边界上有激光需要注入
@@ -528,11 +531,11 @@ CONTAINS
                IF (time >= current%t_start .AND. time <= current%t_end) THEN
                   DO j = 0,nz
                      DO i = 0,ny
-                        p_x = x_max ! or x_max? The grid says x_max.
-                        p_y = y_min + REAL(i, num) * dy + 0.5_num * dy
-                        p_z = z_min + REAL(j, num) * dz + 0.5_num * dz
+                        p_x = x_max_local
+                        p_y = y_min_local + REAL(i, num) * dy + 0.5_num * dy
+                        p_z = z_min_local + REAL(j, num) * dz + 0.5_num * dz
 
-                        CALL gpulse(time, p_x, p_y, p_z, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
+                        CALL gpulse(time, p_y, p_z, p_x, current%phase_offset, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
 
                         source1(i,j) = source1(i,j) + gp_Ey
                         source2(i,j) = source2(i,j) + gp_Ez
@@ -615,11 +618,11 @@ CONTAINS
                IF (time >= current%t_start .AND. time <= current%t_end) THEN
                   DO j = 0,nz
                      DO i = 0,nx
-                        p_x = x_min + REAL(i, num) * dx + 0.5_num * dx
-                        p_y = y_min
-                        p_z = z_min + REAL(j, num) * dz + 0.5_num * dz
+                        p_x = x_min_local + REAL(i, num) * dx + 0.5_num * dx
+                        p_y = y_min_local
+                        p_z = z_min_local + REAL(j, num) * dz + 0.5_num * dz
 
-                        CALL gpulse(time, p_x, p_y, p_z, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
+                        CALL gpulse(time, p_x, p_z, p_y, current%phase_offset, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
 
                         source1(i,j) = source1(i,j) + gp_Ez
                         source2(i,j) = source2(i,j) + gp_Ex
@@ -632,7 +635,7 @@ CONTAINS
          END DO
       END IF
 
-      ! 将激光源项代入 Mur 出射边界条件方程，计算边界处的磁场分量 bz 和 by
+      ! 将激光源项代入 Mur 出���边界条件方程，计算边界处的磁场分量 bz 和 by
       bx(0:nx, laserpos-1, 0:nz) = sum * ( 4.0_num * source1 &
          + 2.0_num * (ez_y_min(0:nx, 0:nz) + c * bx_y_min(0:nx, 0:nz)) &
          - 2.0_num * ez(0:nx, laserpos, 0:nz) &
@@ -702,11 +705,11 @@ CONTAINS
                IF (time >= current%t_start .AND. time <= current%t_end) THEN
                   DO j = 0,nz
                      DO i = 0,nx
-                        p_x = x_min + REAL(i, num) * dx + 0.5_num * dx
-                        p_y = y_max
-                        p_z = z_min + REAL(j, num) * dz + 0.5_num * dz
+                        p_x = x_min_local + REAL(i, num) * dx + 0.5_num * dx
+                        p_y = y_max_local
+                        p_z = z_min_local + REAL(j, num) * dz + 0.5_num * dz
 
-                        CALL gpulse(time, p_x, p_y, p_z, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
+                        CALL gpulse(time, p_x, p_z, p_y, current%phase_offset, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
 
                         source1(i,j) = source1(i,j) + gp_Ez
                         source2(i,j) = source2(i,j) + gp_Ex
@@ -789,11 +792,11 @@ CONTAINS
                IF (time >= current%t_start .AND. time <= current%t_end) THEN
                   DO j = 0,ny
                      DO i = 0,nx
-                        p_x = x_min + REAL(i, num) * dx + 0.5_num * dx
-                        p_y = y_min + REAL(j, num) * dy + 0.5_num * dy
-                        p_z = z_min
+                        p_x = x_min_local + REAL(i, num) * dx + 0.5_num * dx
+                        p_y = y_min_local + REAL(j, num) * dy + 0.5_num * dy
+                        p_z = z_min_local
 
-                        CALL gpulse(time, p_x, p_y, p_z, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
+                        CALL gpulse(time, p_x, p_y, p_z, current%phase_offset, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
 
                         source1(i,j) = source1(i,j) + gp_Ex
                         source2(i,j) = source2(i,j) + gp_Ey
@@ -876,11 +879,11 @@ CONTAINS
                IF (time >= current%t_start .AND. time <= current%t_end) THEN
                   DO j = 0,ny
                      DO i = 0,nx
-                        p_x = x_min + REAL(i, num) * dx + 0.5_num * dx
-                        p_y = y_min + REAL(j, num) * dy + 0.5_num * dy
-                        p_z = z_max
+                        p_x = x_min_local + REAL(i, num) * dx + 0.5_num * dx
+                        p_y = y_min_local + REAL(j, num) * dy + 0.5_num * dy
+                        p_z = z_max_local
 
-                        CALL gpulse(time, p_x, p_y, p_z, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
+                        CALL gpulse(time, p_x, p_y, p_z, current%phase_offset, gp_Ex, gp_Ey, gp_Ez, gp_Bx, gp_By, gp_Bz)
 
                         source1(i,j) = source1(i,j) + gp_Ex
                         source2(i,j) = source2(i,j) + gp_Ey

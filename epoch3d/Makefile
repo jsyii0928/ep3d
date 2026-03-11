@@ -69,7 +69,7 @@ endif
 # gfortran
 # ========
 ifeq ($(strip $(COMPILER)),gfortran)
-  FFLAGS = -O3 -g -std=f2003
+  FFLAGS = -O3 -g -std=f2003 -fopenmp
 
   GNUVER := $(shell gfortran -dumpversion | head -1 \
       | sed 's/[^0-9\.]*\([0-9\.]\+\).*/\1/')
@@ -170,7 +170,7 @@ endif
 MPIF90 ?= mpif90
 FFLAGS += -I$(SDF)/include
 FFLAGS += $(MODULEFLAG)
-LDFLAGS = $(FFLAGS) -L$(SDF)/lib -lsdf
+LDFLAGS = $(FFLAGS) -L$(SDF)/lib -lsdf -fopenmp
 
 # Set some of the build parameters
 TARGET = epoch3d
@@ -474,8 +474,8 @@ deck.o: deck.F90 bremsstrahlung.o custom_deck.o deck_boundaries_block.o \
   deck_control_block.o deck_dist_fn_block.o deck_fields_block.o \
   deck_injector_block.o deck_io_block.o deck_io_global_block.o \
   deck_laser_block.o deck_part_from_file_block.o deck_particle_probe_block.o \
-  deck_qed_block.o deck_species_block.o deck_stencil_block.f90 \
-  deck_subset_block.o deck_window_block.f90 photons.o strings.o utilities.o \
+  deck_qed_block.o deck_species_block.o deck_stencil_block.o \
+  deck_subset_block.o deck_window_block.o photons.o strings.o utilities.o \
   version_data.o $(SDFMOD)
 deck_boundaries_block.o: deck_boundaries_block.f90 strings_advanced.o \
   utilities.o
@@ -530,7 +530,8 @@ ionise.o: ionise.F90 boundary.o calc_df.o numerics.o partlist.o \
   random_generator.o utilities.o
 iterators.o: iterators.F90 particle_id_hash.o particle_pointer_advance.o \
   partlist.o
-laser.o: laser.f90 custom_laser.o evaluate.o gpulse_mod.o
+laser.o: laser.f90 custom_laser.o evaluate.o gpulse.o
+	$(FC) -c $(FFLAGS) $(FLTCONS) -o $(OBJDIR)/$@ $(PREPROFLAGS) $<
 mpi_routines.o: mpi_routines.F90 helper.o
 mpi_subtype_control.o: mpi_subtype_control.f90 shared_data.o
 numerics.o: numerics.f90 constants.o
@@ -567,5 +568,5 @@ version_data.o: version_data.F90 $(SRCDIR)/COMMIT
 welcome.o: welcome.F90 shared_data.o terminal_controls.o version_data.o
 window.o: window.F90 boundary.o evaluate.o partlist.o
 gpulse.o: gpulse.f90 gpulse_constants.o shared_data.o
+	$(FC) -c $(FFLAGS) $(FLTCONS) -o $(OBJDIR)/$@ $(PREPROFLAGS) $<
 gpulse_constants.o: gpulse_constants.f90 shared_data.o
-gpulse_mod.o: gpulse.o
