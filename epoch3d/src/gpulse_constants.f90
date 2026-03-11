@@ -30,7 +30,7 @@ module gpulse_constants
    real(dp), parameter :: F0_SI = 0.00635_dp       ! (6.35 mm)
    real(dp), parameter :: D_SI = 0.0254_dp         ! (25.4 mm)
    real(dp), parameter :: HOLE_SI = 0.005_dp       ! (5 mm)
-   real(dp), parameter :: RANGE_SI = 4e-6_dp       ! (4 um)
+   real(dp), parameter :: RANGE_SI = 2.0e-5_dp       ! (20 um)
 
    ! --- Reference Scales Calculation ---
    real(dp), parameter :: omega_r = 2.0_dp * PI * C_SI / LAMBDA0_SI
